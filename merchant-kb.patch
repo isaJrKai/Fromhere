@@ -1,0 +1,743 @@
+From f713cb336d03e63a8cefdc991f9ea1661a15a195 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 16 Nov 2026 22:03:01 +0000
+Subject: [PATCH] Add deterministic Merchant Knowledge Base for Telegram
+ assistant
+
+---
+ docs/MERCHANT_KNOWLEDGE_BASE.md             | 40 +++++++++
+ package.json                                |  1 +
+ src/lib/merchant-kb/entries/account.ts      | 20 +++++
+ src/lib/merchant-kb/entries/analytics.ts    | 21 +++++
+ src/lib/merchant-kb/entries/discovery.ts    | 15 ++++
+ src/lib/merchant-kb/entries/enquiries.ts    | 16 ++++
+ src/lib/merchant-kb/entries/growth.ts       | 12 +++
+ src/lib/merchant-kb/entries/identity.ts     | 15 ++++
+ src/lib/merchant-kb/entries/photos.ts       | 18 ++++
+ src/lib/merchant-kb/entries/pricing.ts      | 17 ++++
+ src/lib/merchant-kb/entries/products.ts     | 32 +++++++
+ src/lib/merchant-kb/entries/registration.ts | 28 ++++++
+ src/lib/merchant-kb/entries/sales-stock.ts  | 20 +++++
+ src/lib/merchant-kb/entries/shop-setup.ts   | 25 ++++++
+ src/lib/merchant-kb/helpers.ts              |  6 ++
+ src/lib/merchant-kb/index.ts                | 22 +++++
+ src/lib/merchant-kb/matcher.ts              | 82 ++++++++++++++++++
+ src/lib/merchant-kb/merchant-kb.test.ts     | 95 +++++++++++++++++++++
+ src/lib/merchant-kb/normalize.ts            | 42 +++++++++
+ src/lib/merchant-kb/types.ts                | 40 +++++++++
+ 20 files changed, 567 insertions(+)
+ create mode 100644 docs/MERCHANT_KNOWLEDGE_BASE.md
+ create mode 100644 src/lib/merchant-kb/entries/account.ts
+ create mode 100644 src/lib/merchant-kb/entries/analytics.ts
+ create mode 100644 src/lib/merchant-kb/entries/discovery.ts
+ create mode 100644 src/lib/merchant-kb/entries/enquiries.ts
+ create mode 100644 src/lib/merchant-kb/entries/growth.ts
+ create mode 100644 src/lib/merchant-kb/entries/identity.ts
+ create mode 100644 src/lib/merchant-kb/entries/photos.ts
+ create mode 100644 src/lib/merchant-kb/entries/pricing.ts
+ create mode 100644 src/lib/merchant-kb/entries/products.ts
+ create mode 100644 src/lib/merchant-kb/entries/registration.ts
+ create mode 100644 src/lib/merchant-kb/entries/sales-stock.ts
+ create mode 100644 src/lib/merchant-kb/entries/shop-setup.ts
+ create mode 100644 src/lib/merchant-kb/helpers.ts
+ create mode 100644 src/lib/merchant-kb/index.ts
+ create mode 100644 src/lib/merchant-kb/matcher.ts
+ create mode 100644 src/lib/merchant-kb/merchant-kb.test.ts
+ create mode 100644 src/lib/merchant-kb/normalize.ts
+ create mode 100644 src/lib/merchant-kb/types.ts
+
+diff --git a/docs/MERCHANT_KNOWLEDGE_BASE.md b/docs/MERCHANT_KNOWLEDGE_BASE.md
+new file mode 100644
+index 0000000..f0d8e8a
+--- /dev/null
++++ b/docs/MERCHANT_KNOWLEDGE_BASE.md
+@@ -0,0 +1,40 @@
++# Merchant Knowledge Base
++
++Deterministic FAQ layer for the Telegram Merchant Assistant. Known questions are answered with **no AI call**. Lives in `src/lib/merchant-kb/`. It does not touch the webhook route, the listing publisher or the schema.
++
++## Use from the router
++```ts
++import { merchantKb, renderReply } from '@/lib/merchant-kb'
++const out = renderReply(merchantKb().match(text)) // { text, action?, useAI }
++// useAI -> existing Groq fallback; action -> { kind: 'command' | 'miniapp' | 'workflow', value }
++```
++Results: `answer`, `unsupported` (not live yet; never stated as fact), `ambiguous` (ask "did you mean"), `no_match` (AI fallback).
++
++## Status rules
++`live` and `partial` are served (partial appends its `statusNote`). `unverified` and `planned` are never served. Every entry cites its source. A test asserts every `command` action exists in the real webhook route.
++
++## Test
++`bun run test:merchant-kb`
++
++## Gaps that need backend work or owner confirmation
++- `registration.resume` (unverified): Confirm Mini App saves an unfinished profile; resumable in-chat onboarding is not built
++- `shop.change-name` (partial): In-chat profile edit with confirmation
++- `shop.change-contact` (partial): In-chat contact edit with confirmation
++- `shop.change-location-hours` (partial): In-chat location/hours edit
++- `shop.change-photo` (partial): In-chat image change with moderation
++- `products.post` (partial): PR #288 merged + verified (photo-to-product in chat)
++- `products.change-price` (partial): In-chat edit via existing validated listing service + confirmation
++- `products.soldout` (partial): In-chat availability update + confirmation
++- `photos.rejected` (partial): Surface exact rejection reason in Telegram
++- `pricing.momo` (partial): verify against source
++- `pricing.negotiable` (unverified): Confirm whether negotiable/discount fields exist
++- `pricing.fees` (unverified): Confirmed pricing policy from owner. Never guess.
++- `discovery.not-appearing` (partial): verify against source
++- `analytics.summary` (partial): In-chat analytics retrieval from business-analytics API (real figures only)
++- `analytics.top-product` (partial): In-chat per-product analytics
++- `analytics.contacts` (partial): In-chat contact analytics
++- `sales.record` (partial): In-chat sale recording via business-records with confirmation
++- `sales.export` (partial): Confirm export UI path and format
++- `stock.update` (partial): In-chat stock update with confirmation
++- `sales.expense` (unverified): Confirm expense records exist in business-records
++- `growth.reminders` (partial): Growth Coach delivery to Telegram
+diff --git a/package.json b/package.json
+index 647bddf..683c947 100755
+--- a/package.json
++++ b/package.json
+@@ -16,6 +16,7 @@
+     "db:seed": "node scripts/guard-local-db.mjs && bun scripts/seed.ts",
+     "test:public-listing-expiry": "bun test scripts/test-public-listing-expiry.test.mjs",
+     "test:merchant-growth": "bun test src/lib/merchant-growth.test.mjs",
++    "test:merchant-kb": "bun test src/lib/merchant-kb/merchant-kb.test.ts",
+     "test:web-push": "bun test src/lib/web-push.test.mjs",
+     "test:listing-visibility": "bun test scripts/test-listing-visibility.test.mjs"
+   },
+diff --git a/src/lib/merchant-kb/entries/account.ts b/src/lib/merchant-kb/entries/account.ts
+new file mode 100644
+index 0000000..c451cb5
+--- /dev/null
++++ b/src/lib/merchant-kb/entries/account.ts
+@@ -0,0 +1,20 @@
++import { cmd, faq } from '../helpers';
++const M = 'docs/TELEGRAM_MERCHANT_ASSISTANT.md';
++export const account = [
++  faq('account.reconnect', 'account', 'live',
++    ['How do I reconnect my Telegram account?', 'My Telegram is not linked', 'The bot does not recognise me', 'Link Telegram to a different account'],
++    'Generate a new one-time code in Account, then send /link CODE. Each Mudaala account has one active Telegram, so linking a new one replaces the old one.',
++    { action: cmd('/link'), src: M + ' (Buyer account identity)' }),
++  faq('account.unlink', 'account', 'live',
++    ['How do I disconnect Telegram?', 'Unlink my account', 'Stop the bot from managing my shop'],
++    'Send /unlink from the connected private chat. This disconnects Telegram and turns off Telegram enquiries. You will need a new code to reconnect.',
++    { action: cmd('/unlink'), src: M }),
++  faq('account.security', 'account', 'live',
++    ['Is my shop safe?', 'Can someone else change my shop?', 'Someone else is using my account'],
++    'Only the Telegram account you linked can use your shop here. Mudaala never asks for your password in chat, and the bot only works in private chats.',
++    { src: M + ' (hashed ids, private chats only)' }),
++  faq('account.commands', 'account', 'live',
++    ['What can this bot do?', 'List of commands', 'Show me the menu', 'How do I use this bot?'],
++    'Send /help to see every command: /search, /link, /unlink, /shop, /publicshop, /products, /enquiries, /messages, /reply and /followup.',
++    { action: cmd('/help'), src: 'webhook route.ts (/help text)' }),
++];
+diff --git a/src/lib/merchant-kb/entries/analytics.ts b/src/lib/merchant-kb/entries/analytics.ts
+new file mode 100644
+index 0000000..e6422a1
+--- /dev/null
++++ b/src/lib/merchant-kb/entries/analytics.ts
+@@ -0,0 +1,21 @@
++import { app, faq } from '../helpers';
++const A = 'docs/TELEGRAM_MINI_APP.md (Insights)';
++const note = 'Asking for these numbers here in chat is still being built.';
++export const analytics = [
++  faq('analytics.summary', 'analytics', 'partial',
++    ['How many people visited my shop today?', 'How is my shop performing?', 'Show my shop stats', 'How did I perform this week?'],
++    'Send /shop and open Insights. You will see recorded views, shop visits, call and WhatsApp taps, shares and your top listings.',
++    { action: app(), src: A, note, needs: 'In-chat analytics retrieval from business-analytics API (real figures only)' }),
++  faq('analytics.top-product', 'analytics', 'partial',
++    ['Which product received the most views?', 'Which products are getting attention?', 'What is my best product?', 'How many views did my product get?'],
++    'Open Insights in My Shop to see your top listings by recorded views.',
++    { action: app(), src: A, note, needs: 'In-chat per-product analytics' }),
++  faq('analytics.contacts', 'analytics', 'partial',
++    ['How many people contacted me?', 'How many clicked WhatsApp?', 'How many people called me?'],
++    'Open Insights in My Shop to see call and WhatsApp taps. A tap means someone pressed the button. It does not prove a call or message happened.',
++    { action: app(), src: A, note, needs: 'In-chat contact analytics' }),
++  faq('analytics.meaning', 'analytics', 'live',
++    ['What does product engagement mean?', 'What is a view?', 'Is a view a sale?', 'What is a tap?'],
++    'A view means someone opened your product. A tap means someone pressed Call or WhatsApp. Neither is a confirmed sale. Only sales you record yourself count as sales, and Mudaala does not verify payments.',
++    { src: A + ' (labels distinguish taps/views from confirmed sales)' }),
++];
+diff --git a/src/lib/merchant-kb/entries/discovery.ts b/src/lib/merchant-kb/entries/discovery.ts
+new file mode 100644
+index 0000000..364e2ec
+--- /dev/null
++++ b/src/lib/merchant-kb/entries/discovery.ts
+@@ -0,0 +1,15 @@
++import { app, cmd, faq } from '../helpers';
++export const discovery = [
++  faq('discovery.find', 'discovery', 'live',
++    ['How do customers find my products?', 'How will people see my shop?', 'Where do my products show up?'],
++    'Customers can find your active listings through Mudaala search and browse, and through your public shop link. Send /publicshop to get the link.',
++    { action: cmd('/publicshop'), src: 'docs/TELEGRAM_COMMERCE_ASSISTANT_IMPLEMENTATION.md (search active eligible listings)' }),
++  faq('discovery.not-appearing', 'discovery', 'partial',
++    ['Why isn\'t my product appearing?', 'My product is not showing', 'Customers cannot see my listing', 'Product missing from search'],
++    'Only active, unexpired listings show to customers. Send /products to see what is active now. If your product is missing, it may have expired after 30 days or may not have finished posting.',
++    { action: cmd('/products'), src: 'webhook route.ts (/products filters ACTIVE + not expired)', note: 'If it should be active and is not, tell us.' }),
++  faq('discovery.share', 'discovery', 'live',
++    ['How do I share my shop?', 'Share my products on WhatsApp', 'How can I advertise my shop?'],
++    'Send /publicshop, then share that link on WhatsApp, Facebook or anywhere your customers are.',
++    { action: cmd('/publicshop'), src: 'webhook route.ts (/publicshop)' }),
++];
+diff --git a/src/lib/merchant-kb/entries/enquiries.ts b/src/lib/merchant-kb/entries/enquiries.ts
+new file mode 100644
+index 0000000..8d72410
+--- /dev/null
++++ b/src/lib/merchant-kb/entries/enquiries.ts
+@@ -0,0 +1,16 @@
++import { app, cmd, faq } from '../helpers';
++const E = 'docs/TELEGRAM_COMMERCE_ASSISTANT_IMPLEMENTATION.md (section 2) + webhook route.ts';
++export const enquiries = [
++  faq('enquiries.reply', 'enquiries', 'live',
++    ['How do I reply to customers?', 'A customer messaged me', 'Answer a customer enquiry', 'Where do I see customer messages?', 'See my enquiries'],
++    'Send /enquiries to see shopper enquiries. Reply with /reply ID your message, and your reply is passed to the customer.',
++    { action: cmd('/enquiries'), src: E }),
++  faq('enquiries.enable', 'enquiries', 'live',
++    ['How do I get customer enquiries on Telegram?', 'Turn on Telegram enquiries', 'I am not receiving enquiries here'],
++    'Link your Telegram with /link CODE, start this bot, and enable Telegram enquiries on your listings. Only accounts with a shop profile can enable them. If you are not connected, shoppers are shown WhatsApp or phone instead.',
++    { action: cmd('/link'), src: 'docs/TELEGRAM_MERCHANT_ASSISTANT.md (Buyer account identity)' }),
++  faq('enquiries.payment', 'enquiries', 'live',
++    ['Did the customer pay?', 'How do I know a customer has paid?', 'Confirm payment from customer', 'Customer says they sent money'],
++    'Mudaala does not collect or confirm payments, so I can never tell you a customer has paid. Check your own mobile money or bank record before you hand over goods.',
++    { src: 'docs/TELEGRAM_COMMERCE_ASSISTANT_IMPLEMENTATION.md (not checkout-first, not a bank)', needs: 'Verified payment integration if ever added' }),
++];
+diff --git a/src/lib/merchant-kb/entries/growth.ts b/src/lib/merchant-kb/entries/growth.ts
+new file mode 100644
+index 0000000..dbe48a7
+--- /dev/null
++++ b/src/lib/merchant-kb/entries/growth.ts
+@@ -0,0 +1,12 @@
++import { app, faq } from '../helpers';
++const G = 'docs/MUDAALA_GROWTH_COACH.md';
++export const growth = [
++  faq('growth.attract', 'growth', 'live',
++    ['How do I attract more customers?', 'How can I sell more?', 'Give me tips to grow my shop'],
++    'Complete your shop profile, add products with clear real photos, keep prices and availability up to date, reply to enquiries quickly and share your shop poster and link.',
++    { src: G + ' (recommendation principles)' }),
++  faq('growth.reminders', 'growth', 'partial',
++    ['Remind me later', 'Remind me in 30 minutes', 'Why did I get this reminder?', 'Stop sending me reminders', 'Snooze notification'],
++    'Reminders come from real activity in your shop and appear in your Mudaala notification centre. You can snooze for 15 minutes, 30 minutes, 1 hour or tomorrow, or dismiss them.',
++    { action: app(), src: G + ' (Merchant controls)', note: 'Reminders inside Telegram are still being connected.', needs: 'Growth Coach delivery to Telegram' }),
++];
+diff --git a/src/lib/merchant-kb/entries/identity.ts b/src/lib/merchant-kb/entries/identity.ts
+new file mode 100644
+index 0000000..c408f2c
+--- /dev/null
++++ b/src/lib/merchant-kb/entries/identity.ts
+@@ -0,0 +1,15 @@
++import { app, faq } from '../helpers';
++export const identity = [
++  faq('identity.mucode', 'identity', 'live',
++    ['What is a MU-CODE?', 'How do I get my MU-CODE?', 'Where is my mucode?', 'What is my shop code?'],
++    'Your MU-CODE is your shop code, for example MD-4821. It identifies your shop on Mudaala, never changes, and is created when you set up your shop. Customers can type it into Mudaala search or scan your QR poster.',
++    { action: app(), src: 'src/lib/shop.ts (MD- + 4 digits, never regenerated); src/lib/copy.ts posterCodeNote', needs: 'Owner decision: customer-facing name is "shop code" in the UI, "MU-CODE" in docs' }),
++  faq('identity.qr', 'identity', 'live',
++    ['How do I get my shop QR code?', 'Send me my QR code', 'I want a QR code for my shop', 'Where can I print my QR?', 'Shop poster'],
++    'Open your shop page and tap Show poster and print. It makes a printable QR poster with your shop code, and you can share it on WhatsApp. Anyone who scans it lands on your shop. The code stays the same, so old posters keep working.',
++    { action: app(), src: 'src/components/commerce/shop-view.tsx; src/lib/copy.ts posterTitle/posterShow/posterShare', needs: 'Send QR/poster as an image inside chat' }),
++  faq('identity.find-by-code', 'identity', 'live',
++    ['Can customers find me with my code?', 'How do customers use my MU-CODE?', 'Can someone search my shop by code?'],
++    'Yes. Customers can type your shop code into Mudaala search like a till number, or scan your QR poster.',
++    { src: 'src/lib/copy.ts findAgainHint; src/app/api/shops/lookup/route.ts' }),
++];
+diff --git a/src/lib/merchant-kb/entries/photos.ts b/src/lib/merchant-kb/entries/photos.ts
+new file mode 100644
+index 0000000..f5e949e
+--- /dev/null
++++ b/src/lib/merchant-kb/entries/photos.ts
+@@ -0,0 +1,18 @@
++import { app, faq } from '../helpers';
++export const photos = [
++  faq('photos.limit', 'photos', 'live',
++    ['Photo too large', 'Image file size too big', 'How many photos can I add?', 'What is the maximum photo size?'],
++    'Each listing can have up to 4 photos, and each photo can be up to 8MB. If a photo is too big, take it again at a lower camera quality or send it as a normal photo.',
++    { src: 'src/lib/validation.ts photos max(4); src/app/api/upload/route.ts MAX_BYTES 8MB' }),
++  faq('photos.rejected', 'photos', 'partial',
++    ['Why was my photo rejected?', 'My picture was not accepted', 'Photo upload failed', 'Photo blocked'],
++    'Mudaala checks every photo before it goes live. Use a clear photo of the actual product in good light and try again. The app shows the reason when it rejects one.',
++    { action: app(), src: 'src/lib/image-moderation.ts; docs/MARKETPLACE_TRUST_AND_SAFETY.md', note: 'If it keeps failing, tell us what you uploaded.', needs: 'Surface exact rejection reason in Telegram' }),
++  faq('photos.add-more', 'photos', 'live',
++    ['Add another photo', 'Can I add more pictures to a product?', 'Attach a second image to my listing'],
++    'Open Products, pick the product and add photos, up to 4 in total.', { action: app(), src: 'src/lib/validation.ts photos max(4)' }),
++  faq('photos.tips', 'photos', 'live',
++    ['How do I take good product photos?', 'Tips for better pictures', 'What kind of photo sells best?'],
++    'Use daylight, keep the product in the middle and in focus, and show the real item. Clear real photos help customers trust your shop.',
++    { src: 'docs/MUDAALA_GROWTH_COACH.md (real shop facts only); general guidance' }),
++];
+diff --git a/src/lib/merchant-kb/entries/pricing.ts b/src/lib/merchant-kb/entries/pricing.ts
+new file mode 100644
+index 0000000..021ed6c
+--- /dev/null
++++ b/src/lib/merchant-kb/entries/pricing.ts
+@@ -0,0 +1,17 @@
++import { app, faq } from '../helpers';
++export const pricing = [
++  faq('pricing.format', 'pricing', 'live',
++    ['What currency do I use for prices?', 'How do I write the price?', 'Can I leave the price empty?', 'Ask seller price'],
++    'Enter the price as a number, for example 85000. If you leave the price empty, customers see "Ask seller".',
++    { action: app(), src: 'webhook route.ts (price === null -> Ask seller)' }),
++  faq('pricing.momo', 'pricing', 'partial',
++    ['Can I add my mobile money code?', 'Add my MoMo merchant code', 'Show payment details on my shop', 'Which payment methods can I show customers?'],
++    'You can add a mobile money merchant code and network to your shop profile. Mudaala connects shoppers to you but does not collect or confirm payments.',
++    { action: app(), src: 'src/lib/validation.ts momoMerchantCode; docs/TELEGRAM_COMMERCE_ASSISTANT_IMPLEMENTATION.md (not a bank)', note: 'Always confirm payment yourself before handing over goods.' }),
++  faq('pricing.negotiable', 'pricing', 'unverified',
++    ['Can customers negotiate the price?', 'Mark a price as negotiable', 'How do I set a discount?'],
++    'Pricing options depend on what Mudaala supports.', { src: 'none', needs: 'Confirm whether negotiable/discount fields exist' }),
++  faq('pricing.fees', 'pricing', 'unverified',
++    ['Do I pay to use Mudaala?', 'How much does it cost to sell on Mudaala?', 'Are there fees?', 'Is Mudaala free?'],
++    'Fees must be confirmed by the Mudaala team.', { src: 'none', needs: 'Confirmed pricing policy from owner. Never guess.' }),
++];
+diff --git a/src/lib/merchant-kb/entries/products.ts b/src/lib/merchant-kb/entries/products.ts
+new file mode 100644
+index 0000000..a12df46
+--- /dev/null
++++ b/src/lib/merchant-kb/entries/products.ts
+@@ -0,0 +1,32 @@
++import { app, cmd, faq } from '../helpers';
++const P = 'docs/TELEGRAM_MINI_APP.md (Merchant workspace)';
++export const products = [
++  faq('products.post', 'products', 'partial',
++    ['How do I upload products?', 'Post this product', 'How do I add a product to my shop?', 'I want to list an item for sale', 'How do I post a product with a photo?'],
++    'Send /shop, open Products and add your product with its photos and price. It goes through the same checks as the website.',
++    { action: app(), src: P, note: 'Posting by sending a photo straight into this chat is still being finished.', needs: 'PR #288 merged + verified (photo-to-product in chat)' }),
++  faq('products.list', 'products', 'live',
++    ['Show my products', 'What products do I have?', 'List everything in my shop', 'See my catalogue'],
++    'Send /products to see your 10 latest active products. Open My Shop for the full catalogue.',
++    { action: cmd('/products'), src: 'webhook route.ts (/products)' }),
++  faq('products.change-price', 'products', 'partial',
++    ['Can I change a product price?', 'Change the price', 'I want to update the price of my product', 'How do I edit a price?'],
++    'Yes. Send /shop, open Products, pick the product and edit its price.',
++    { action: app(), src: P, note: 'Changing a price by typing in chat is still being built.', needs: 'In-chat edit via existing validated listing service + confirmation' }),
++  faq('products.soldout', 'products', 'partial',
++    ['How do I mark something sold out?', 'This product is sold out', 'Item finished', 'Product out of stock', 'Change availability'],
++    'Send /shop, open Products, pick the product and update its availability. Availability is shown to customers as seller-reported.',
++    { action: app(), src: 'prisma/schema.prisma availabilityStatus', note: 'Marking sold out by typing in chat is still being built.', needs: 'In-chat availability update + confirmation' }),
++  faq('products.expiry', 'products', 'live',
++    ['Why did my product disappear?', 'How long does a listing stay active?', 'My listing expired', 'Do products expire?', 'How do I renew a listing?'],
++    'Listings stay active for 30 days from when you post or refresh them, then they expire. Open Products and refresh the ones you still want to sell.',
++    { action: app(), src: 'src/lib/constants.ts LISTING_ACTIVE_DAYS = 30; prisma expiresAt', needs: 'Verify the exact refresh control in the Mini App' }),
++  faq('products.delete', 'products', 'live',
++    ['How do I delete a product?', 'Remove a listing from my shop', 'Delete this product', 'Take a product off for good'],
++    'Open Products, pick the product and delete it. Deleting is permanent and cannot be undone. If you only want it off for now, pause it instead.',
++    { action: app(), src: 'src/app/api/listings/[id]/route.ts DELETE (owner-scoped hard delete)', needs: 'In-chat delete MUST show the product and require explicit confirmation' }),
++  faq('products.pause', 'products', 'live',
++    ['How do I hide a product?', 'Pause this product', 'Take a product off my shop temporarily', 'Archive a listing', 'How do I bring a hidden product back?'],
++    'Open Products and archive the product to pause it. Customers stop seeing it, and you can set it back to active whenever you like. If Mudaala hides a listing for a rule violation, you cannot restore it yourself.',
++    { action: app(), src: 'src/lib/validation.ts listingStatusSchema (ACTIVE|FULFILLED|ARCHIVED|EXPIRED); [id]/route.ts repost; prisma HIDDEN = moderation takedown', needs: 'In-chat pause/restore with confirmation' }),
++];
+diff --git a/src/lib/merchant-kb/entries/registration.ts b/src/lib/merchant-kb/entries/registration.ts
+new file mode 100644
+index 0000000..ba52659
+--- /dev/null
++++ b/src/lib/merchant-kb/entries/registration.ts
+@@ -0,0 +1,28 @@
++import { app, cmd, faq } from '../helpers';
++const D = 'docs/TELEGRAM_MINI_APP.md';
++export const registration = [
++  faq('registration.start-selling', 'registration', 'live',
++    ['How do I start selling on Mudaala?', 'I want to open a shop', 'Help me register', 'How do I create a shop on Mudaala?', 'I want to sell clothes', 'I am new, where do I begin?'],
++    'Send /shop and tap Open My Shop. Create your account there with your phone number and password, then set up your shop profile. Your MU-CODE is created automatically.',
++    { action: app(), src: D + ' (Entry and onboarding)', needs: 'Registration directly inside chat (not just the Mini App)' }),
++  faq('registration.have-account', 'registration', 'live',
++    ['I already have a Mudaala account', 'How do I connect my Telegram to my shop?', 'How do I link my account?', 'Where do I get the link code?'],
++    'Sign in to Mudaala and open Account, then generate a one-time code (valid 10 minutes). Send it here as /link CODE. Or sign in inside the Mini App with /shop.',
++    { action: cmd('/link'), src: 'docs/TELEGRAM_MERCHANT_ASSISTANT.md (Merchant flow)' }),
++  faq('registration.code-expired', 'registration', 'live',
++    ['My link code does not work', 'Link code expired', 'Invalid code when I send /link', 'The code is not accepted'],
++    'Link codes work once and expire after 10 minutes. Open Account in Mudaala, generate a fresh code, and send it as /link CODE.',
++    { action: cmd('/link'), src: 'docs/TELEGRAM_MERCHANT_ASSISTANT.md (Merchant flow)' }),
++  faq('registration.what-needed', 'registration', 'live',
++    ['What do I need to open a shop?', 'What details are required to register?', 'What information do I give for my shop profile?'],
++    'You will be asked for a shop name, category, district and area, phone and WhatsApp numbers, a short description (up to 500 characters), opening hours and a profile photo. The shop name needs at least 2 characters and no emojis.',
++    { action: app(), src: 'src/lib/validation.ts businessProfileSchema' }),
++  faq('registration.phone-verify', 'registration', 'live',
++    ['Does Telegram verify my phone number?', 'Is my business verified?', 'How do I get verified?'],
++    'Linking Telegram does not verify your phone number or your business. It only connects this chat to your Mudaala account.',
++    { src: D + ' (Authentication and account linking)' }),
++  faq('registration.resume', 'registration', 'unverified',
++    ['Continue my registration', 'I stopped halfway registering my shop', 'Resume shop setup'],
++    'You can continue setting up your shop from Open My Shop.',
++    { src: D, needs: 'Confirm Mini App saves an unfinished profile; resumable in-chat onboarding is not built' }),
++];
+diff --git a/src/lib/merchant-kb/entries/sales-stock.ts b/src/lib/merchant-kb/entries/sales-stock.ts
+new file mode 100644
+index 0000000..b8dfd57
+--- /dev/null
++++ b/src/lib/merchant-kb/entries/sales-stock.ts
+@@ -0,0 +1,20 @@
++import { app, faq } from '../helpers';
++const S = 'src/lib/business-records.ts; src/app/api/my/sales';
++const note = 'Recording by typing in chat is still being built.';
++export const salesStock = [
++  faq('sales.record', 'sales-stock', 'partial',
++    ['How do I record a sale?', 'I sold something, write it down', 'Add a sale to my records'],
++    'Send /shop and use your business records to record a sale. A recorded sale is what you tell Mudaala. It is not payment-verified.',
++    { action: app(), src: S, note, needs: 'In-chat sale recording via business-records with confirmation' }),
++  faq('sales.export', 'sales-stock', 'partial',
++    ['Can I export my sales records?', 'Download my business records', 'Give me my sales report'],
++    'Your business records can be exported from your shop dashboard.',
++    { action: app(), src: 'src/app/api/my/business-export/route.ts', needs: 'Confirm export UI path and format' }),
++  faq('stock.update', 'sales-stock', 'partial',
++    ['How do I update my stock?', 'Change how many items I have', 'Track my stock', 'Record stock coming in'],
++    'Stock movements can be recorded against your business products in your shop dashboard.',
++    { action: app(), src: 'src/lib/business-records.ts stockMovementSchema', note, needs: 'In-chat stock update with confirmation' }),
++  faq('sales.expense', 'sales-stock', 'unverified',
++    ['How do I record expenses?', 'Add a cost to my records', 'I spent money on stock'],
++    'Expenses can be recorded in your business records.', { src: 'none', needs: 'Confirm expense records exist in business-records' }),
++];
+diff --git a/src/lib/merchant-kb/entries/shop-setup.ts b/src/lib/merchant-kb/entries/shop-setup.ts
+new file mode 100644
+index 0000000..9bf05fa
+--- /dev/null
++++ b/src/lib/merchant-kb/entries/shop-setup.ts
+@@ -0,0 +1,25 @@
++import { app, cmd, faq } from '../helpers';
++const S = 'docs/TELEGRAM_MINI_APP.md (My shop) + src/lib/validation.ts';
++const note = 'Changing this by typing in chat is still being built.';
++export const shopSetup = [
++  faq('shop.change-name', 'shop-setup', 'partial',
++    ['How do I change my shop name?', 'Rename my shop', 'Update the name of my business'],
++    'Send /shop, open My shop and edit your profile. The name needs 2 to 80 characters and no emojis.',
++    { action: app(), src: S, note, needs: 'In-chat profile edit with confirmation' }),
++  faq('shop.change-contact', 'shop-setup', 'partial',
++    ['How do I change my phone number?', 'Update my WhatsApp number', 'Change my contact number', 'Customers are calling the wrong number'],
++    'Send /shop, open My shop and edit your phone or WhatsApp number there.',
++    { action: app(), src: S, note, needs: 'In-chat contact edit with confirmation' }),
++  faq('shop.change-location-hours', 'shop-setup', 'partial',
++    ['How do I change my shop location?', 'Update my opening hours', 'I moved my shop to a new area', 'Change my trading area'],
++    'Send /shop, open My shop and edit your district, area or opening hours (up to 120 characters).',
++    { action: app(), src: S, note, needs: 'In-chat location/hours edit' }),
++  faq('shop.change-photo', 'shop-setup', 'partial',
++    ['How do I change my shop logo?', 'Update my profile photo', 'Add a cover photo to my shop'],
++    'Send /shop, open My shop and change your profile photo or cover photo in your shop profile.',
++    { action: app(), src: S, note, needs: 'In-chat image change with moderation' }),
++  faq('shop.preview', 'shop-setup', 'live',
++    ['How does my shop look to customers?', 'Preview my shop', 'Show me my public shop page', 'Send me my shop link', 'How do I get my shop link?'],
++    'Send /publicshop and I will give you your public shop link. Open it to see exactly what customers see.',
++    { action: cmd('/publicshop'), src: 'src/app/api/telegram/webhook/route.ts (/publicshop)' }),
++];
+diff --git a/src/lib/merchant-kb/helpers.ts b/src/lib/merchant-kb/helpers.ts
+new file mode 100644
+index 0000000..b7d4bc9
+--- /dev/null
++++ b/src/lib/merchant-kb/helpers.ts
+@@ -0,0 +1,6 @@
++import type { FaqAction, FaqEntry, ImplStatus, Topic } from './types';
++export const cmd = (value: string): FaqAction => ({ kind: 'command', value });
++export const app = (): FaqAction => ({ kind: 'miniapp' });
++type Opts = { action?: FaqAction; src: string; note?: string; needs?: string };
++export const faq = (id: string, topic: Topic, status: ImplStatus, questions: string[], answer: string, o: Opts): FaqEntry =>
++  ({ id, topic, status, questions, answer, action: o.action, source: o.src, statusNote: o.note, needs: o.needs });
+diff --git a/src/lib/merchant-kb/index.ts b/src/lib/merchant-kb/index.ts
+new file mode 100644
+index 0000000..89fda10
+--- /dev/null
++++ b/src/lib/merchant-kb/index.ts
+@@ -0,0 +1,22 @@
++import { account } from './entries/account';
++import { analytics } from './entries/analytics';
++import { discovery } from './entries/discovery';
++import { enquiries } from './entries/enquiries';
++import { growth } from './entries/growth';
++import { identity } from './entries/identity';
++import { photos } from './entries/photos';
++import { pricing } from './entries/pricing';
++import { products } from './entries/products';
++import { registration } from './entries/registration';
++import { salesStock } from './entries/sales-stock';
++import { shopSetup } from './entries/shop-setup';
++import { createMatcher } from './matcher';
++import type { FaqEntry, MatcherOptions } from './types';
++
++export const ALL_ENTRIES: FaqEntry[] = [
++  ...registration, ...shopSetup, ...products, ...photos, ...pricing, ...identity,
++  ...discovery, ...analytics, ...enquiries, ...salesStock, ...growth, ...account,
++];
++export const merchantKb = (opts?: MatcherOptions) => createMatcher(ALL_ENTRIES, opts);
++export { createMatcher, renderReply, gapReport } from './matcher';
++export type * from './types';
+diff --git a/src/lib/merchant-kb/matcher.ts b/src/lib/merchant-kb/matcher.ts
+new file mode 100644
+index 0000000..8515df2
+--- /dev/null
++++ b/src/lib/merchant-kb/matcher.ts
+@@ -0,0 +1,82 @@
++import { tokenize, normalize } from './normalize';
++import type { FaqAction, FaqEntry, MatchResult, MatcherOptions } from './types';
++
++interface Indexed { entry: FaqEntry; variants: { norm: string; set: Set<string> }[] }
++
++export function createMatcher(entries: FaqEntry[], opts: MatcherOptions = {}) {
++  const threshold = opts.threshold ?? 0.55;
++  const gap = opts.ambiguityGap ?? 0.06;
++  const serve = new Set(opts.serveStatuses ?? ['live', 'partial']);
++
++  const index: Indexed[] = entries.map((entry) => ({
++    entry,
++    variants: entry.questions.map((q) => ({ norm: normalize(q), set: new Set(tokenize(q)) })),
++  }));
++
++  // IDF over all variants: rare words (qr, mucode, expense) count more than "post"/"shop".
++  const df = new Map<string, number>();
++  let N = 0;
++  for (const { variants } of index) for (const v of variants) { N++; for (const t of v.set) df.set(t, (df.get(t) ?? 0) + 1); }
++  const idf = (t: string) => Math.log(1 + N / (1 + (df.get(t) ?? 0)));
++  const w = (s: Set<string>) => [...s].reduce((a, t) => a + idf(t), 0);
++
++  function score(qNorm: string, qSet: Set<string>, v: { norm: string; set: Set<string> }): number {
++    if (qNorm && qNorm === v.norm) return 1;
++    if (!qSet.size || !v.set.size) return 0;
++    let inter = 0;
++    for (const t of qSet) if (v.set.has(t)) inter += idf(t);
++    // Words we have never seen in any FAQ (product names like "handbag") must not dilute the score.
++    const known = new Set([...qSet].filter((t) => df.has(t)));
++    const q = w(known), f = w(v.set);
++    if (!q) return 0;
++    const containment = inter / q;            // how much of what they said is covered
++    const coverage = inter / f;               // how much of the FAQ variant they hit
++    return 0.65 * containment + 0.35 * coverage;
++  }
++
++  function match(message: string): MatchResult {
++    const qSet = new Set(tokenize(message));
++    const qNorm = normalize(message);
++    if (qSet.size === 0) return { kind: 'no_match', bestScore: 0 };
++
++    const scored = index
++      .map(({ entry, variants }) => ({ entry, score: Math.max(...variants.map((v) => score(qNorm, qSet, v))) }))
++      .sort((a, b) => b.score - a.score);
++
++    const best = scored[0];
++    if (!best || best.score < threshold) return { kind: 'no_match', bestScore: best?.score ?? 0 };
++
++    const close = scored.filter((s) => s.score >= threshold && best.score - s.score <= gap);
++    if (close.length > 1) {
++      // weak tie => we don't actually understand it; let AI interpret instead of offering random options
++      if (best.score < 0.7) return { kind: 'no_match', bestScore: best.score };
++      // same-topic near-duplicates are fine to disambiguate; cross-entry closeness => ask
++      return { kind: 'ambiguous', candidates: close.slice(0, 3).map((s) => s.entry) };
++    }
++    if (!serve.has(best.entry.status)) return { kind: 'unsupported', entry: best.entry, score: best.score };
++    return { kind: 'answer', entry: best.entry, score: best.score };
++  }
++
++  return { match };
++}
++
++/** Merchant-facing text. Never states unbuilt features as fact. */
++export function renderReply(r: MatchResult): { text: string; action?: FaqAction; useAI: boolean } {
++  switch (r.kind) {
++    case 'answer': {
++      const note = r.entry.status === 'partial' && r.entry.statusNote ? `\n\nNote: ${r.entry.statusNote}` : '';
++      return { text: r.entry.answer + note, action: r.entry.action, useAI: false };
++    }
++    case 'unsupported':
++      return { text: r.entry.statusNote ?? "That isn't available in Telegram yet. We're working on it.", useAI: false };
++    case 'ambiguous':
++      return { text: 'Did you mean:\n' + r.candidates.map((c, i) => `${i + 1}. ${c.questions[0]}`).join('\n'), useAI: false };
++    case 'no_match':
++      return { text: '', useAI: true };
++  }
++}
++
++/** Gap list for the PR description: everything not yet live and what backend it needs. */
++export function gapReport(entries: FaqEntry[]) {
++  return entries.filter((e) => e.status !== 'live').map((e) => ({ id: e.id, status: e.status, needs: e.needs ?? 'verify against source' }));
++}
+diff --git a/src/lib/merchant-kb/merchant-kb.test.ts b/src/lib/merchant-kb/merchant-kb.test.ts
+new file mode 100644
+index 0000000..55e9b77
+--- /dev/null
++++ b/src/lib/merchant-kb/merchant-kb.test.ts
+@@ -0,0 +1,95 @@
++import { describe, expect, it } from 'bun:test'
++import { readFileSync } from 'node:fs'
++import { ALL_ENTRIES, gapReport, merchantKb, renderReply } from './index.ts'
++
++const all = merchantKb({ serveStatuses: ['live', 'partial', 'unverified', 'planned'] })
++const prod = merchantKb()
++const idOf = (r: any) => r.entry?.id ?? r.candidates?.map((c: any) => c.id)
++
++describe('data integrity', () => {
++  it('ids unique; each entry has phrasings, answer, source', () => {
++    const ids = ALL_ENTRIES.map((e) => e.id)
++    expect(new Set(ids).size).toBe(ids.length)
++    for (const e of ALL_ENTRIES) { expect(e.questions.length).toBeGreaterThanOrEqual(3); expect(e.answer.length).toBeGreaterThan(10); expect(e.source).toBeTruthy() }
++  })
++  it('covers all 12 topics', () => expect(new Set(ALL_ENTRIES.map((e) => e.topic)).size).toBe(12))
++  it('partial entries carry a statusNote or a needs gap', () => {
++    for (const e of ALL_ENTRIES.filter((e) => e.status === 'partial')) expect(Boolean(e.statusNote || e.needs)).toBe(true)
++  })
++  it('every command action exists in the real webhook route', () => {
++    const route = readFileSync(new URL('../../app/api/telegram/webhook/route.ts', import.meta.url), 'utf8')
++    for (const e of ALL_ENTRIES) if (e.action?.kind === 'command') expect(route).toContain(`'${e.action.value}'`)
++  })
++  it('no served answer claims payments are confirmed or sales are guaranteed', () => {
++    for (const e of ALL_ENTRIES.filter((e) => e.status !== 'unverified')) expect(/has paid you|payment (is )?confirmed by mudaala/i.test(e.answer)).toBe(false)
++  })
++})
++
++describe('exact + alternative phrasing', () => {
++  it.each([
++    ['What is a MU-CODE?', 'identity.mucode'],
++    ['Show my products', 'products.list'],
++    ['How do I reply to customers?', 'enquiries.reply'],
++    ['How do I get my shop link?', 'shop.preview'],
++    ['whats my mu code', 'identity.mucode'],
++    ['my link code does not work', 'registration.code-expired'],
++    ['why did my listing expire', 'products.expiry'],
++    ['i want to change the price of my handbag', 'products.change-price'],
++    ['mark handbag as sold out', 'products.soldout'],
++    ['photo too big', 'photos.limit'],
++    ['how many people looked at my shop', 'analytics.summary'],
++    ['is a view a sale', 'analytics.meaning'],
++    ['disconnect telegram', 'account.unlink'],
++    ['did the customer pay', 'enquiries.payment'],
++  ])('%s -> %s', (q, id) => expect(idOf(all.match(q))).toBe(id))
++})
++
++describe('verified controls', () => {
++  it('delete warns it is permanent and points to pause', () => {
++    const t = renderReply(prod.match('How do I delete a product?')).text
++    expect(t).toMatch(/permanent/); expect(t).toMatch(/pause/)
++  })
++  it('pause explains restore and moderation limit', () => {
++    expect(renderReply(prod.match('How do I hide a product?')).text).toMatch(/cannot restore/)
++  })
++  it('QR answer gives the real path', () => expect(renderReply(prod.match('How do I get my shop QR code?')).text).toMatch(/Show poster and print/))
++})
++
++describe('actions', () => {
++  it('returns the existing command to run', () => {
++    expect(renderReply(prod.match('Show my products')).action).toEqual({ kind: 'command', value: '/products' })
++    expect(renderReply(prod.match('How do I get my shop link?')).action).toEqual({ kind: 'command', value: '/publicshop' })
++  })
++  it('points to the Mini App for management tasks', () => {
++    expect(renderReply(prod.match('How do I upload products?')).action).toEqual({ kind: 'miniapp' })
++  })
++})
++
++describe('honesty about unbuilt features', () => {
++  it('partial answers carry their note', () => {
++    const t = renderReply(prod.match('How do I upload products?')).text
++    expect(t).toContain('open Products')
++    expect(t).toContain('Note:')
++  })
++  it('unverified entries are never served in production mode', () => {
++    for (const q of ['Do I pay to use Mudaala?', 'Are there fees?', 'Can customers negotiate the price?']) {
++      expect(prod.match(q).kind === 'answer').toBe(false)
++    }
++  })
++  it('fees are never guessed', () => expect(renderReply(prod.match('Are there fees?')).text).not.toMatch(/free|\d+%|UGX/i))
++  it('never claims a payment', () => expect(renderReply(prod.match('Did the customer pay?')).text).toMatch(/does not collect or confirm payments/))
++})
++
++describe('fallback and ambiguity', () => {
++  it.each(['what is the weather in kampala', 'hello', 'asdf qwerty', ''])('%j goes to AI', (q) => {
++    const r = all.match(q)
++    expect(r.kind).toBe('no_match')
++    expect(renderReply(r).useAI).toBe(true)
++  })
++  it('known questions never need AI', () => expect(renderReply(prod.match('How do I link my account?')).useAI).toBe(false))
++  it('vague input does not return a confident wrong answer', () => expect(['ambiguous', 'no_match']).toContain(all.match('change my shop').kind))
++})
++
++describe('gap report', () => {
++  it('lists non-live entries', () => expect(gapReport(ALL_ENTRIES).length).toBe(ALL_ENTRIES.filter((e) => e.status !== 'live').length))
++})
+diff --git a/src/lib/merchant-kb/normalize.ts b/src/lib/merchant-kb/normalize.ts
+new file mode 100644
+index 0000000..0ff5956
+--- /dev/null
++++ b/src/lib/merchant-kb/normalize.ts
+@@ -0,0 +1,42 @@
++const PHRASES: [RegExp, string][] = [
++  [/\bmu[\s-]?code\b/g, 'mucode'],
++  [/\bqr[\s-]?code\b/g, 'qr'],
++  [/\bsold[\s-]?out\b/g, 'soldout'],
++  [/\bout of stock\b/g, 'soldout'],
++  [/\bno longer available\b/g, 'soldout'],
++  [/\bwhats\s?app\b/g, 'whatsapp'],
++  [/\bopening hours\b|\bworking hours\b|\bbusiness hours\b/g, 'hours'],
++  [/\bsign ?up\b|\bregister\b|\bopen a shop\b|\bcreate a shop\b|\bstart selling\b/g, 'register'],
++];
++const SYN: Record<string, string> = {
++  upload: 'post', publish: 'post', add: 'post', list: 'post', listing: 'product', item: 'product', items: 'product', products: 'product',
++  remove: 'delete', erase: 'delete', hide: 'pause', archive: 'pause', unpublish: 'pause',
++  pic: 'photo', pics: 'photo', picture: 'photo', pictures: 'photo', image: 'photo', images: 'photo', photograph: 'photo', photos: 'photo', photographs: 'photo',
++  store: 'shop', business: 'shop', shops: 'shop', stores: 'shop',
++  cost: 'price', pricing: 'price', prices: 'price', amount: 'price',
++  edit: 'change', update: 'change', modify: 'change', correct: 'change', fix: 'change',
++  customers: 'customer', buyers: 'customer', buyer: 'customer', clients: 'customer', enquiries: 'enquiry', inquiries: 'enquiry', inquiry: 'enquiry', messages: 'enquiry', message: 'enquiry',
++  stats: 'analytics', statistics: 'analytics', insights: 'analytics', performance: 'analytics', views: 'view', visitors: 'view', visits: 'view', visited: 'view',
++  link: 'link', url: 'link', share: 'share', sharing: 'share',
++  rejected: 'reject', refused: 'reject', declined: 'reject', blocked: 'reject',
++  appearing: 'appear', showing: 'appear', visible: 'appear', seen: 'appear',
++  expenses: 'expense', costs: 'expense', sales: 'sale', sell: 'sale', sold: 'sale',
++  telegram: 'telegram', bot: 'telegram', account: 'account', login: 'account', connect: 'account', reconnect: 'account', link2: 'account',
++};
++const STOP = new Set(['a','an','the','i','im','my','me','we','our','you','your','to','do','does','did','how','can','could','would','should','is','are','am','it','its','of','on','in','at','for','and','or','with','this','that','what','whats','want','wanna','need','please','help','some','any','be','get','have','has','there','so','just','if','when','where','why','which','will','now','mark','something','set']);
++
++export function tokenize(input: string): string[] {
++  let s = input.toLowerCase().replace(/['’]/g, '');
++  for (const [re, to] of PHRASES) s = s.replace(re, ` ${to} `);
++  const raw = s.replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(Boolean);
++  const out: string[] = [];
++  for (let w of raw) {
++    if (STOP.has(w)) continue;
++    if (SYN[w]) w = SYN[w];
++    else if (w.length > 4 && w.endsWith('ing')) w = w.slice(0, -3);
++    else if (w.length > 3 && w.endsWith('s') && !w.endsWith('ss')) w = w.slice(0, -1);
++    out.push(w);
++  }
++  return out;
++}
++export const normalize = (s: string) => tokenize(s).join(' ');
+diff --git a/src/lib/merchant-kb/types.ts b/src/lib/merchant-kb/types.ts
+new file mode 100644
+index 0000000..5e02971
+--- /dev/null
++++ b/src/lib/merchant-kb/types.ts
+@@ -0,0 +1,40 @@
++export type Topic =
++  | 'registration' | 'shop-setup' | 'products' | 'photos' | 'pricing' | 'identity'
++  | 'discovery' | 'analytics' | 'enquiries' | 'sales-stock' | 'growth' | 'account';
++
++/**
++ * live        = merged, tested, verified in production -> served to merchants
++ * partial     = works but incomplete -> served, with statusNote appended
++ * planned     = not built yet -> NEVER served as fact; returns "unsupported"
++ * unverified  = written from spec, not yet checked against code -> NEVER served until flipped
++ */
++export type ImplStatus = 'live' | 'partial' | 'planned' | 'unverified';
++
++export type FaqAction =
++  | { kind: 'command'; value: string }   // existing bot command, e.g. "/products"
++  | { kind: 'miniapp'; value?: string }  // open the Mini App (https://mudaala.store/telegram)
++  | { kind: 'workflow'; value: string }; // future in-chat workflow id (router-owned)
++
++export interface FaqEntry {
++  id: string;                 // e.g. "products.post-photo"
++  topic: Topic;
++  questions: string[];        // canonical question + alternative phrasings
++  answer: string;             // verified answer (what to say once status is live/partial)
++  action?: FaqAction;         // what the router should offer/run after the answer
++  source: string;             // source of truth: file/PR/endpoint that proves the answer
++  status: ImplStatus;
++  statusNote?: string;        // shown to merchant for partial/planned
++  needs?: string;             // backend capability required before this can go live
++}
++
++export type MatchResult =
++  | { kind: 'answer'; entry: FaqEntry; score: number }
++  | { kind: 'unsupported'; entry: FaqEntry; score: number }
++  | { kind: 'ambiguous'; candidates: FaqEntry[] }
++  | { kind: 'no_match'; bestScore: number }; // -> hand to conversational AI fallback
++
++export interface MatcherOptions {
++  threshold?: number;                 // min score to accept (default 0.55)
++  ambiguityGap?: number;              // top-2 within this gap => ambiguous (default 0.06)
++  serveStatuses?: ImplStatus[];       // default ['live','partial']
++}
+-- 
+2.43.0
+
